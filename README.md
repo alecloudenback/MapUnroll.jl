@@ -10,7 +10,7 @@ To avoid issues and ensure performance with `map`s that use intermediate variabl
 
 ```julia
 function simulate(n)
-    x = 0.
+    x = 0.0
 
     map(1:n) do i
         x += exp(i)
@@ -28,6 +28,7 @@ using MapUnroll
 function simulate_unroll(n)
     out = UndefVector{Union{}}(n)
     x = 0.0
+
     @unroll 2 for i ∈ 1:n
         x += exp(i)
         out = setindex!!(out, (timestep=i,state=x), i)
