@@ -25,7 +25,7 @@ Into this:
 ```julia
 using MapUnroll
 
-function simulate2(n)
+function simulate_unroll(n)
     out = UndefVector{Union{}}(n)
     x = 0.0
     @unroll 2 for i ∈ 1:n
@@ -86,12 +86,16 @@ Body::Vector
 └──       return %10
 ```
 
-However `simulate2` avoids this and has faster performance as a result:
+However `simulate_unroll` avoids this and has faster performance as a result:
 
 ```julia-repl
 julia> using BenchmarkTools
 julia> @btime simulate(100)
   9.167 μs (407 allocations: 11.12 KiB)
-julia> @btime simulate2(100)
+julia> @btime simulate_unroll(100)
   233.583 ns (2 allocations: 1.62 KiB)
 ```
+
+Credit:
+
+The original `@unroll` macro was developed by [Mason Protter](https://github.com/MasonProtter)
