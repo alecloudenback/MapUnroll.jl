@@ -96,6 +96,6 @@ julia> @btime simulate_unroll(100)
   233.583 ns (2 allocations: 1.62 KiB)
 ```
 
-Credit:
+## Credit
 
 The original `@unroll` macro was developed by [Mason Protter](https://github.com/MasonProtter)
