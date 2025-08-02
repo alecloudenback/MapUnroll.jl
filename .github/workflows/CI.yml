@@ -147,8 +147,10 @@ jobs:
 
           # --- 3. Create Markdown Table ---
           # Define Highlighters for the table
-          red_bold = MarkdownHighlighter((data, i, j) -> (j == 4) && data[i, 4] < 0, MarkdownDecoration(bold = true, color = "red"))
-          green_bold = MarkdownHighlighter((data, i, j) -> (j == 4) && data[i, 4] > 0, MarkdownDecoration(bold = true, color = "green"))
+          mh_1 = MarkdownHighlighter(
+            (data, i, j) -> (j == 4) && data[i, 4] > <0,
+            MarkdownDecoration(bold = true)
+           )
 
           # Select and rename columns for the final table
           final_table_df = select(comparison_df, :file, :base_coverage, :pr_coverage, :change, :change_str)
@@ -159,7 +161,7 @@ jobs:
               pretty_table(io,
                   final_table_df[!, ["File", "Base (%)", "PR (%)", "Change (%)"]]; # Use the string version of change
                   backend = Val(:markdown),
-                  highlighters = (red_bold, green_bold)
+                  highlighters = (mh_1, mh_1)
               )
           end
           println("Coverage comparison table saved to cov_table.md")
@@ -210,6 +212,12 @@ jobs:
             <!-- GITHUB_ACTIONS_COVERAGE_COMMENT -->
           # 'replace' ensures the entire old comment is wiped and replaced with the new one
           edit-mode: replace
+
+      - name: Check critical step status
+        if: steps.generate-table.outcome == 'failure'
+        run: |
+          echo "The coverage of the PR is not >= the target branch OR the workflow errored."
+          exit 1
 
 
   docs:
