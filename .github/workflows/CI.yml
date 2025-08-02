@@ -156,8 +156,8 @@ jobs:
           # Write the markdown table to a file
           open("cov_table.md", "w") do io
               pretty_table(io,
-                  final_table_df[!, 
-                  header = ["File", "Base (%)", "PR (%)", "Change (%)"]; # Use the string version of change
+                  final_table_df, 
+                  header = ["File", "Base (%)", "PR (%)", "Change (%)"], 
                   formatters=ft_printf("%5.2f", 2:4),
                   backend = Val(:markdown),
                   highlighters = (mh_1, mh_1)
