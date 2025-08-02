@@ -71,7 +71,7 @@ jobs:
 
 
           println("Coverage summary saved to coverage_summary.csv")
-          cat coverage_summary.csv
+          run(`cat coverage_summary.csv`)
 
       # New step to upload the CSV as an artifact
       - uses: actions/upload-artifact@v4
