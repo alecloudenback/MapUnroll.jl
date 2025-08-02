@@ -80,7 +80,7 @@ jobs:
           path: coverage_summary_pr.csv
 
   test-base-branch:
-    name: Base Branch Coverage
+    name: Coverage vs Target Branch
     needs: test
     runs-on: ubuntu-latest
     # This 'if' condition ensures the job only runs on pull request events
@@ -112,6 +112,7 @@ jobs:
       - uses: julia-actions/julia-runtest@v1
 
       - name: Generate base coverage summary
+        continue-on-error: true 
         shell: julia --project --color=yes {0}
         run: |
           using Pkg
@@ -169,16 +170,42 @@ jobs:
 
           using PrettyTables
           mh_1 = MarkdownHighlighter(
-           (data, i, j) -> data < 0,
+           (data, i, j) -> (j == 4) && data[i, 4] > <0,
            MarkdownDecoration(bold = true)
           )
 
+          open("cov_table.md", "w") do io
+            pretty_table(
+            data;
+            alignment = [:l, :r, :r, :r],
+            backend = Val(:markdown),
+            header = header,
+            highlighters = (mh_1, mh_1)
+            )
+          end
 
-      - name: Upload base coverage artifact
+          base_coverage = sum(base_df.covered_lines) / sum(base_df.total_lines)
+          pr_coverage = sum(pr_df.covered_lines) / sum(pr_df.total_lines)
+
+          println("Base Coverage: $(base_coverage * 100)%")
+          println("PR Coverage:   $(pr_coverage * 100)%")
+
+          # The critical check
+          if pr_coverage < base_coverage
+            # 1. Print a clear error message for the logs
+            println("❌ ERROR: Coverage decreased! Failing the build.")
+            
+            # 2. Tell the Julia process to exit with a failure code
+            exit(1)
+          end
+
+          println("✅ Coverage check passed!")
+
+      - name: Upload comparison table
         uses: actions/upload-artifact@v4
         with:
-          name: base-coverage-summary
-          path: coverage_summary_base.csv
+          name: cov-comparison
+          path: cov_table.md
 
 
   docs:
