@@ -140,7 +140,10 @@ jobs:
           comparison_df.base_coverage = coalesce.(comparison_df.base_coverage, 0.0)
           comparison_df.pr_coverage = coalesce.(comparison_df.pr_coverage, 0.0)
           comparison_df.change = comparison_df.pr_coverage .- comparison_df.base_coverage
-
+          @show base_df
+          @show pr_df
+          @show comparison_df
+          
           # --- Create Markdown Table with Header ---
           final_table_df = select(comparison_df, :file, :base_coverage, :pr_coverage, :change)
           open("cov_table.md", "w") do io
