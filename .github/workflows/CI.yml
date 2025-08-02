@@ -16,16 +16,15 @@ jobs:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    permissions: # needed to allow julia-actions/cache to proactively delete old caches that it has created
+    permissions:
       actions: write
       contents: read
     strategy:
       fail-fast: false
       matrix:
         version:
-          - '1.10'
-          - '1.11'
-          - 'pre'
+          - 'lts'
+          - '1'
         os:
           - ubuntu-latest
         arch:
@@ -39,12 +38,182 @@ jobs:
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
-      - uses: julia-actions/julia-processcoverage@v1
-      - uses: codecov/codecov-action@v5
+
+      # New step to generate the CSV
+      - name: Generate coverage summary for this PR
+        if: matrix.version == '1' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'
+        shell: julia --project --color=yes {0}
+        run: |
+          using Pkg
+          Pkg.add(["Coverage","CSV"])
+          using Coverage
+
+          # Collect coverage from .cov files
+          coverage = process_folder("src")
+
+          # Open a file to write the summary
+          open("coverage_summary_pr.csv", "w") do io
+              # Write the CSV header
+              println(io, "file,covered_lines,total_lines,coverage_percentage")
+
+              # Write data for each file
+              for file in coverage
+                  # get_summary returns a tuple: (covered_lines, total_lines)
+                  covered_lines, total_lines = get_summary(file)
+                  
+                  if total_lines > 0
+                      filename = file.filename
+                      percentage = round(100 * covered_lines / total_lines, digits=2)
+                      println(io, "$filename,$covered_lines,$total_lines,$percentage")
+                  end
+              end
+          end
+
+
+          println("Coverage summary saved to coverage_summary_pr.csv")
+          run(`cat coverage_summary_pr.csv`)
+
+      # New step to upload the CSV as an artifact
+      - uses: actions/upload-artifact@v4
         with:
-          files: lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
+          name: coverage-summary-pr
+          path: coverage_summary_pr.csv
+
+  test-base-branch:
+    name: Coverage vs Target Branch
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Setup Julia & Test Package
+        uses: julia-actions/setup-julia@v2
+      - uses: julia-actions/cache@v2
+      - uses: julia-actions/julia-buildpkg@v1
+      - uses: julia-actions/julia-runtest@v1
+        with:
+          version: '1'
+
+      - name: Download PR Coverage Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-summary-pr
+          path: .
+
+      - name: Generate Coverage Comparison Table
+        id: generate-table # This step now has the correct ID
+        continue-on-error: true # This allows us to handle the failure in subsequent steps
+        shell: julia --project --color=yes {0}
+        run: |
+          using Pkg
+          Pkg.add(["Coverage", "CSV", "DataFrames", "PrettyTables"])
+          using Coverage, CSV, DataFrames, PrettyTables, Printf
+
+          # --- Generate Base Coverage ---
+          coverage = process_folder("src")
+          open("coverage_summary_base.csv", "w") do io
+              println(io, "file,covered_lines,total_lines,coverage_percentage")
+              for file in coverage
+                  covered_lines, total_lines = get_summary(file)
+                  if total_lines > 0
+                      filename = file.filename
+                      percentage = round(100 * covered_lines / total_lines, digits = 2)
+                      println(io, "$filename,$covered_lines,$total_lines,$percentage")
+                  end
+              end
+          end
+          println("Base coverage summary saved to coverage_summary_base.csv")
+
+          # --- Load Data ---
+          base_df = CSV.read("coverage_summary_base.csv", DataFrame)
+          pr_df = CSV.read("coverage_summary_pr.csv", DataFrame)
+
+          # --- Join and Calculate Deltas ---
+          rename!(base_df, :coverage_percentage => :base_coverage)
+          rename!(pr_df, :coverage_percentage => :pr_coverage)
+          comparison_df = outerjoin(base_df[!, [:file, :base_coverage]], pr_df[!, [:file, :pr_coverage]], on = :file)
+          comparison_df.base_coverage = coalesce.(comparison_df.base_coverage, 0.0)
+          comparison_df.pr_coverage = coalesce.(comparison_df.pr_coverage, 0.0)
+          comparison_df.change = comparison_df.pr_coverage .- comparison_df.base_coverage
+          @show base_df
+          @show pr_df
+          @show comparison_df
+          
+          # --- Create Markdown Table with Header ---
+          final_table_df = select(comparison_df, :file, :base_coverage, :pr_coverage, :change)
+          open("cov_table.md", "w") do io
+              # Add a complete header for the success case
+              println(io, "## 📊 Code Coverage Report\n")
+              println(io, "**Status:** ✅ Passed\n")
+              
+              pretty_table(io,
+                  final_table_df, 
+                  header = ["File", "Base (%)", "PR (%)", "Change (%)"], 
+                  formatters=ft_printf("%5.2f", 2:4),
+                  backend = Val(:markdown),
+                  highlighters = (MarkdownHighlighter((data, i, j) -> (j == 4) && data[i, 4] < 0, MarkdownDecoration(bold = true)),)
+              )
+          end
+          println("Coverage comparison table saved to cov_table.md")
+          run(`cat cov_table.md`)
+
+          # --- Coverage Check Logic ---
+          base_coverage = sum(base_df.covered_lines) / sum(base_df.total_lines)
+          pr_coverage = sum(pr_df.covered_lines) / sum(pr_df.total_lines)
+
+          println("Base Coverage: $(base_coverage * 100)%")
+          println("PR Coverage:   $(pr_coverage * 100)%")
+
+          # The critical check
+          if pr_coverage < base_coverage
+            println("❌ ERROR: Coverage decreased! Failing the build.")
+            exit(1) # This causes the step to fail
+          end
+
+          println("✅ Coverage check passed!")
+
+      # Runs ONLY if the coverage check was successful
+      - name: Update PR Comment with Success
+        if: steps.generate-table.outcome == 'success'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-id: '<!-- GITHUB_ACTIONS_COVERAGE_COMMENT -->'
+          edit-mode: replace
+          body-path: cov_table.md # Only body-path is used here
+
+      # Runs ONLY if the coverage check failed
+      - name: Update PR Comment with Failure
+        if: steps.generate-table.outcome == 'failure'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-id: '<!-- GITHUB_ACTIONS_COVERAGE_COMMENT -->'
+          edit-mode: replace
+          body: | # Only body is used here
+            ## 📊 Code Coverage Report
+            **Status:** ❌ Failed
+            **Reason:** Code coverage decreased. Please see the workflow run logs for details.
+            ---
+            *This comment will be updated automatically.*
+            <!-- GITHUB_ACTIONS_COVERAGE_COMMENT -->
+
+      - name: Fail workflow if coverage check failed
+        if: steps.generate-table.outcome == 'failure'
+        run: |
+          echo "Coverage check failed. See previous step for details."
+          exit 1
+
+
+
   docs:
     name: Documentation
     runs-on: ubuntu-latest
