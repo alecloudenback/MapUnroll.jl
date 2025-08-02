@@ -79,7 +79,7 @@ jobs:
           name: coverage-summary-${{ matrix.version }}-${{ matrix.os }}-${{ matrix.arch }}
           path: coverage_summary_pr.csv
 
-          test-base-branch:
+  test-base-branch:
     name: Base Branch Coverage
     runs-on: ubuntu-latest
     # This 'if' condition ensures the job only runs on pull request events
