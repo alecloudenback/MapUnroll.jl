@@ -174,21 +174,30 @@ jobs:
 
           println("✅ Coverage check passed!")
 
-      - name: Create or Update PR Comment
+      # Runs ONLY if the coverage check was successful
+      - name: Update PR Comment with Success
+        if: steps.generate-table.outcome == 'success'
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
           comment-id: '<!-- GITHUB_ACTIONS_COVERAGE_COMMENT -->'
           edit-mode: replace
-          # If the check succeeded, use the generated file, which now has a header.
-          body-path: ${{ steps.generate-table.outcome == 'success' && 'cov_table.md' || '' }}
-          # If the check failed, use this clear failure message.
-          body: |
+          body-path: cov_table.md # Only body-path is used here
+
+      # Runs ONLY if the coverage check failed
+      - name: Update PR Comment with Failure
+        if: steps.generate-table.outcome == 'failure'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-id: '<!-- GITHUB_ACTIONS_COVERAGE_COMMENT -->'
+          edit-mode: replace
+          body: | # Only body is used here
             ## 📊 Code Coverage Report
             **Status:** ❌ Failed
-            **Reason:** Coverage decreased compared to the base branch. Check the workflow run logs for details.
+            **Reason:** Code coverage decreased. Please see the workflow run logs for details.
             ---
-            *This comment will be updated when the checks pass.*
+            *This comment will be updated automatically.*
             <!-- GITHUB_ACTIONS_COVERAGE_COMMENT -->
 
       - name: Fail workflow if coverage check failed
