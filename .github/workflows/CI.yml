@@ -83,7 +83,6 @@ jobs:
     name: Coverage vs Target Branch
     needs: test
     runs-on: ubuntu-latest
-    # This 'if' condition ensures the job only runs on pull request events
     if: github.event_name == 'pull_request'
     permissions:
       actions: write
@@ -104,18 +103,18 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: coverage-summary-pr
-          path: . # Download to current directory
+          path: .
 
       - name: Generate Coverage Comparison Table
-        id: generate-table
-        continue-on-error: true # Allow this step to fail without stopping the workflow
+        id: generate-table # This step now has the correct ID
+        continue-on-error: true # This allows us to handle the failure in subsequent steps
         shell: julia --project --color=yes {0}
         run: |
           using Pkg
           Pkg.add(["Coverage", "CSV", "DataFrames", "PrettyTables"])
           using Coverage, CSV, DataFrames, PrettyTables, Printf
 
-          # --- Generate Base Coverage (as before) ---
+          # --- Generate Base Coverage ---
           coverage = process_folder("src")
           open("coverage_summary_base.csv", "w") do io
               println(io, "file,covered_lines,total_lines,coverage_percentage")
@@ -130,42 +129,37 @@ jobs:
           end
           println("Base coverage summary saved to coverage_summary_base.csv")
 
-          # --- 1. Load Data ---
+          # --- Load Data ---
           base_df = CSV.read("coverage_summary_base.csv", DataFrame)
           pr_df = CSV.read("coverage_summary_pr.csv", DataFrame)
 
-          # --- 2. Join and Calculate Deltas ---
+          # --- Join and Calculate Deltas ---
           rename!(base_df, :coverage_percentage => :base_coverage)
           rename!(pr_df, :coverage_percentage => :pr_coverage)
           comparison_df = outerjoin(base_df[!, [:file, :base_coverage]], pr_df[!, [:file, :pr_coverage]], on = :file)
           comparison_df.base_coverage = coalesce.(comparison_df.base_coverage, 0.0)
           comparison_df.pr_coverage = coalesce.(comparison_df.pr_coverage, 0.0)
           comparison_df.change = comparison_df.pr_coverage .- comparison_df.base_coverage
-          @show comparison_df
 
-          # --- 3. Create Markdown Table ---
-          # Define Highlighters for the table
-          mh_1 = MarkdownHighlighter(
-            (data, i, j) -> (j == 4) && data[i, 4] <0,
-            MarkdownDecoration(bold = true)
-           )
-
-          # Select and rename columns for the final table
+          # --- Create Markdown Table with Header ---
           final_table_df = select(comparison_df, :file, :base_coverage, :pr_coverage, :change)
-
-          # Write the markdown table to a file
           open("cov_table.md", "w") do io
+              # Add a complete header for the success case
+              println(io, "## 📊 Code Coverage Report\n")
+              println(io, "**Status:** ✅ Passed\n")
+              
               pretty_table(io,
                   final_table_df, 
                   header = ["File", "Base (%)", "PR (%)", "Change (%)"], 
                   formatters=ft_printf("%5.2f", 2:4),
                   backend = Val(:markdown),
-                  highlighters = (mh_1, mh_1)
+                  highlighters = (MarkdownHighlighter((data, i, j) -> (j == 4) && data[i, 4] < 0, MarkdownDecoration(bold = true)),)
               )
           end
           println("Coverage comparison table saved to cov_table.md")
-          text: $(cat cov_table.md)
+          run(`cat cov_table.md`)
 
+          # --- Coverage Check Logic ---
           base_coverage = sum(base_df.covered_lines) / sum(base_df.total_lines)
           pr_coverage = sum(pr_df.covered_lines) / sum(pr_df.total_lines)
 
@@ -174,46 +168,35 @@ jobs:
 
           # The critical check
           if pr_coverage < base_coverage
-            # 1. Print a clear error message for the logs
             println("❌ ERROR: Coverage decreased! Failing the build.")
-            
-            # 2. Tell the Julia process to exit with a failure code
-            exit(1)
+            exit(1) # This causes the step to fail
           end
 
           println("✅ Coverage check passed!")
-
-      - name: Read coverage table from file
-        id: file-reader
-        run: |
-          # This is the correct way to read a multi-line file into an output
-          echo 'cov_table<<EOF' >> $GITHUB_OUTPUT
-          cat cov_table.md >> $GITHUB_OUTPUT
-          echo 'EOF' >> $GITHUB_OUTPUT
 
       - name: Create or Update PR Comment
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
-          # Use 'body-path' when the check succeeds for cleaner code
-          body-path: ${{ steps.coverage-check.outcome == 'success' && 'cov_table.md' || '' }}
-          # Use 'body' only when the check fails
+          comment-id: '<!-- GITHUB_ACTIONS_COVERAGE_COMMENT -->'
+          edit-mode: replace
+          # If the check succeeded, use the generated file, which now has a header.
+          body-path: ${{ steps.generate-table.outcome == 'success' && 'cov_table.md' || '' }}
+          # If the check failed, use this clear failure message.
           body: |
             ## 📊 Code Coverage Report
             **Status:** ❌ Failed
-            **Reason:** ${{ steps.coverage-check.outputs.failure_reason }}
+            **Reason:** Coverage decreased compared to the base branch. Check the workflow run logs for details.
             ---
             *This comment will be updated when the checks pass.*
             <!-- GITHUB_ACTIONS_COVERAGE_COMMENT -->
-          comment-id: '<!-- GITHUB_ACTIONS_COVERAGE_COMMENT -->'
-          # This is the correct parameter name
-          edit-mode: replace
 
-      - name: Check critical step status
+      - name: Fail workflow if coverage check failed
         if: steps.generate-table.outcome == 'failure'
         run: |
-          echo "The coverage of the PR is not >= the target branch OR the workflow errored."
+          echo "Coverage check failed. See previous step for details."
           exit 1
+
 
 
   docs:
