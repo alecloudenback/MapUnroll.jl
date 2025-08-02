@@ -88,101 +88,81 @@ jobs:
     permissions:
       actions: write
       contents: read
+      pull-requests: write
     steps:
       - name: Checkout base branch
         uses: actions/checkout@v4
         with:
-          # This is the key: it checks out the target branch of the PR (e.g., 'main')
           ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Setup Julia
         uses: julia-actions/setup-julia@v2
         with:
-          version: '1' # A single stable version is sufficient for the base check
+          version: '1'
 
-      - name: Download PR Branch Coverage Artifacts
+      - name: Download PR Coverage Artifact
         uses: actions/download-artifact@v4
         with:
-          # Use a pattern to grab the PR artifact, regardless of the matrix build
           name: coverage-summary-pr
-          path: . # <-- Downloads file(s) into the current directory
+          path: . # Download to current directory
 
-      - uses: julia-actions/cache@v2
-      - uses: julia-actions/julia-buildpkg@v1
-      - uses: julia-actions/julia-runtest@v1
-
-      - name: Generate base coverage summary
-        continue-on-error: true 
+      - name: Generate Coverage Comparison Table
+        id: generate-table
+        continue-on-error: true # Allow this step to fail without stopping the workflow
         shell: julia --project --color=yes {0}
         run: |
           using Pkg
-          Pkg.add(["Coverage","CSV", "DataFrames","PrettyTables"])
-          using Coverage
+          Pkg.add(["Coverage", "CSV", "DataFrames", "PrettyTables"])
+          using Coverage, CSV, DataFrames, PrettyTables
 
+          # --- Generate Base Coverage (as before) ---
           coverage = process_folder("src")
-          
           open("coverage_summary_base.csv", "w") do io
               println(io, "file,covered_lines,total_lines,coverage_percentage")
               for file in coverage
                   covered_lines, total_lines = get_summary(file)
                   if total_lines > 0
                       filename = file.filename
-                      percentage = round(100 * covered_lines / total_lines, digits=2)
+                      percentage = round(100 * covered_lines / total_lines, digits = 2)
                       println(io, "$filename,$covered_lines,$total_lines,$percentage")
                   end
               end
           end
-
           println("Base coverage summary saved to coverage_summary_base.csv")
 
-          using CSV, DataFrames
-
           # --- 1. Load Data ---
-          # The artifact is downloaded into a directory with the same name
-          base_file = "coverage_summary_base.csv"
-          
-          # Find the first CSV file in the downloaded PR artifacts directory
-          pr_file = "coverage_summary_pr.csv"
+          base_df = CSV.read("coverage_summary_base.csv", DataFrame)
+          pr_df = CSV.read("coverage_summary_pr.csv", DataFrame)
 
-          println("Comparing base file: $(base_file)")
-          println("Comparing PR file: $(pr_file)")
-
-          base_df = CSV.read(base_file, DataFrame)
-          pr_df = CSV.read(pr_file, DataFrame)
-
-          # --- 2. Join DataFrames ---
-          # Rename columns to avoid clashes after joining
+          # --- 2. Join and Calculate Deltas ---
           rename!(base_df, :coverage_percentage => :base_coverage)
           rename!(pr_df, :coverage_percentage => :pr_coverage)
-          
-          # An outer join correctly handles new files (missing in base) and deleted files (missing in pr)
           comparison_df = outerjoin(base_df[!, [:file, :base_coverage]], pr_df[!, [:file, :pr_coverage]], on = :file)
-
-          # --- 3. Calculate Deltas ---
-          # Replace missing values with 0. A new file has 0 base coverage; a deleted file has 0 pr coverage.
           comparison_df.base_coverage = coalesce.(comparison_df.base_coverage, 0.0)
           comparison_df.pr_coverage = coalesce.(comparison_df.pr_coverage, 0.0)
-          
-          # Calculate the change
-          comparison_df.change = comparison_df.pr_coverage - comparison_df.base_coverage
+          comparison_df.change = comparison_df.pr_coverage .- comparison_df.base_coverage
 
-          @show comparison_df
+          # Format change to be a signed string
+          comparison_df.change_str = [chg == 0.0 ? "±0.0" : @sprintf("%+.2f", chg) for chg in comparison_df.change]
 
-          using PrettyTables
-          mh_1 = MarkdownHighlighter(
-           (data, i, j) -> (j == 4) && data[i, 4] > <0,
-           MarkdownDecoration(bold = true)
-          )
+          # --- 3. Create Markdown Table ---
+          # Define Highlighters for the table
+          red_bold = MarkdownHighlighter((data, i, j) -> (j == 4) && data[i, 4] < 0, MarkdownDecoration(bold = true, color = "red"))
+          green_bold = MarkdownHighlighter((data, i, j) -> (j == 4) && data[i, 4] > 0, MarkdownDecoration(bold = true, color = "green"))
 
+          # Select and rename columns for the final table
+          final_table_df = select(comparison_df, :file, :base_coverage, :pr_coverage, :change, :change_str)
+          rename!(final_table_df, :file => "File", :base_coverage => "Base (%)", :pr_coverage => "PR (%)", :change_str => "Change (%)")
+
+          # Write the markdown table to a file
           open("cov_table.md", "w") do io
-            pretty_table(
-            data;
-            alignment = [:l, :r, :r, :r],
-            backend = Val(:markdown),
-            header = header,
-            highlighters = (mh_1, mh_1)
-            )
+              pretty_table(io,
+                  final_table_df[!, ["File", "Base (%)", "PR (%)", "Change (%)"]]; # Use the string version of change
+                  backend = Val(:markdown),
+                  highlighters = (red_bold, green_bold)
+              )
           end
+          println("Coverage comparison table saved to cov_table.md")
 
           base_coverage = sum(base_df.covered_lines) / sum(base_df.total_lines)
           pr_coverage = sum(pr_df.covered_lines) / sum(pr_df.total_lines)
@@ -201,11 +181,35 @@ jobs:
 
           println("✅ Coverage check passed!")
 
-      - name: Upload comparison table
-        uses: actions/upload-artifact@v4
+      - name: Read coverage table from file
+        id: file-reader
+        if: steps.generate-table.outcome == 'success' || steps.generate-table.outcome == 'failure'
+        uses: jsdaniell/create-json@v1.2.2
         with:
-          name: cov-comparison
-          path: cov_table.md
+          name: 'cov_table'
+          json: ${{ toJSON(fromJSON('{}')) }} # Workaround for single-file reading
+          # This action reads the file content into steps.file-reader.outputs.cov_table
+          text: $(cat cov_table.md)
+
+      - name: Create or Update PR Comment
+        # This step runs even if the generation step failed, to report the status
+        if: success() || failure()
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          # The hidden HTML comment that acts as a persistent ID
+          comment-id: '<!-- GITHUB_ACTIONS_COVERAGE_COMMENT -->'
+          # The body of the comment. We build it here.
+          body: |
+            ## 📊 Code Coverage Report
+
+            ${{ steps.file-reader.outputs.cov_table }}
+
+            ---
+            *Report generated by GitHub Actions. This comment will be updated on new commits.*
+            <!-- GITHUB_ACTIONS_COVERAGE_COMMENT -->
+          # 'replace' ensures the entire old comment is wiped and replaced with the new one
+          edit-mode: replace
 
 
   docs:
