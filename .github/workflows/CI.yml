@@ -113,7 +113,7 @@ jobs:
         run: |
           using Pkg
           Pkg.add(["Coverage", "CSV", "DataFrames", "PrettyTables"])
-          using Coverage, CSV, DataFrames, PrettyTables
+          using Coverage, CSV, DataFrames, PrettyTables, Printf
 
           # --- Generate Base Coverage (as before) ---
           coverage = process_folder("src")
