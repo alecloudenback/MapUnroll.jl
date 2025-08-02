@@ -99,6 +99,13 @@ jobs:
         with:
           version: '1' # A single stable version is sufficient for the base check
 
+      - name: Download PR Branch Coverage Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          # Use a pattern to grab the PR artifact, regardless of the matrix build
+          name: coverage-summary-pr
+          path: coverage_summary_pr.csv
+
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
@@ -107,7 +114,7 @@ jobs:
         shell: julia --project --color=yes {0}
         run: |
           using Pkg
-          Pkg.add("Coverage")
+          Pkg.add(["Coverage","CSV", "DataFrames","PrettyTables"])
           using Coverage
 
           coverage = process_folder("src")
@@ -126,52 +133,6 @@ jobs:
 
           println("Base coverage summary saved to coverage_summary_base.csv")
 
-      - name: Upload base coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: base-coverage-summary
-          path: coverage_summary_base.csv
-
-      - uses: julia-actions/julia-processcoverage@v1
-      - uses: codecov/codecov-action@v5
-        with:
-          files: lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
-
-  compare-coverage:
-    name: Compare Coverage
-    runs-on: ubuntu-latest
-    # This job must run after the test jobs are complete
-    needs: [test, test-base-branch]
-    # Only run on pull requests, and only if the upstream jobs succeeded
-    if: github.event_name == 'pull_request' && success()
-
-    steps:
-      - name: Setup Julia
-        uses: julia-actions/setup-julia@v2
-        with:
-          version: '1'
-
-      - name: Download Base Branch Coverage Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: base-coverage-summary
-          path: coverage_summary_base.csv
-
-      - name: Download PR Branch Coverage Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          # Use a pattern to grab the PR artifact, regardless of the matrix build
-          name: coverage-summary-pr
-          path: coverage_summary_pr.csv
-
-      - name: Compare Coverage Summaries
-        id: compare_step
-        shell: julia --project --color=yes {0}
-        run: |
-          using Pkg
-          Pkg.add(["CSV", "DataFrames","PrettyTables"])
           using CSV, DataFrames
 
           # --- 1. Load Data ---
@@ -183,10 +144,10 @@ jobs:
           pr_file = joinpath("coverage-summary-pr", "coverage-summary-pr.csv")
 
           println("Comparing base file: $(base_file)")
-          println("Comparing PR file: $(pr_file_path)")
+          println("Comparing PR file: $(pr_file)")
 
           base_df = CSV.read(base_file, DataFrame)
-          pr_df = CSV.read(pr_file_path, DataFrame)
+          pr_df = CSV.read(pr_file, DataFrame)
 
           # --- 2. Join DataFrames ---
           # Rename columns to avoid clashes after joining
@@ -205,6 +166,13 @@ jobs:
           comparison_df.change = comparison_df.pr_coverage - comparison_df.base_coverage
 
           comparison_df
+
+      - name: Upload base coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-coverage-summary
+          path: coverage_summary_base.csv
+
 
   docs:
     name: Documentation
