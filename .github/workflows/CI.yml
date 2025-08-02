@@ -44,6 +44,8 @@ jobs:
       - name: Generate coverage summary
         shell: julia --project --color=yes {0}
         run: |
+          using Pkg
+          Pkg.add(["Coverage","CSV"])
           using Coverage
 
           # Collect coverage from .cov files in the src folder
