@@ -41,7 +41,7 @@ jobs:
       - uses: julia-actions/julia-runtest@v1
 
       # New step to generate the CSV
-      - name: Generate coverage summary
+      - name: Generate coverage summary for this PR
         shell: julia --project --color=yes {0}
         run: |
           using Pkg
@@ -52,7 +52,7 @@ jobs:
           coverage = process_folder("src")
 
           # Open a file to write the summary
-          open("coverage_summary.csv", "w") do io
+          open("coverage_summary_pr.csv", "w") do io
               # Write the CSV header
               println(io, "file,covered_lines,total_lines,coverage_percentage")
 
@@ -70,14 +70,67 @@ jobs:
           end
 
 
-          println("Coverage summary saved to coverage_summary.csv")
-          run(`cat coverage_summary.csv`)
+          println("Coverage summary saved to coverage_summary_pr.csv")
+          run(`cat coverage_summary_pr.csv`)
 
       # New step to upload the CSV as an artifact
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-summary-${{ matrix.version }}-${{ matrix.os }}-${{ matrix.arch }}
-          path: coverage_summary.csv
+          path: coverage_summary_pr.csv
+
+          test-base-branch:
+    name: Base Branch Coverage
+    runs-on: ubuntu-latest
+    # This 'if' condition ensures the job only runs on pull request events
+    if: github.event_name == 'pull_request'
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          # This is the key: it checks out the target branch of the PR (e.g., 'main')
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: '1' # A single stable version is sufficient for the base check
+
+      - uses: julia-actions/cache@v2
+      - uses: julia-actions/julia-buildpkg@v1
+      - uses: julia-actions/julia-runtest@v1
+
+      - name: Generate base coverage summary
+        shell: julia --project --color=yes {0}
+        run: |
+          using Pkg
+          Pkg.add("Coverage")
+          using Coverage
+
+          coverage = process_folder("src")
+          
+          open("coverage_summary_base.csv", "w") do io
+              println(io, "file,covered_lines,total_lines,coverage_percentage")
+              for file in coverage
+                  covered_lines, total_lines = get_summary(file)
+                  if total_lines > 0
+                      filename = file.filename
+                      percentage = round(100 * covered_lines / total_lines, digits=2)
+                      println(io, "$filename,$covered_lines,$total_lines,$percentage")
+                  end
+              end
+          end
+
+          println("Base coverage summary saved to coverage_summary_base.csv")
+
+      - name: Upload base coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-coverage-summary
+          path: coverage_summary_base.csv
 
       - uses: julia-actions/julia-processcoverage@v1
       - uses: codecov/codecov-action@v5
