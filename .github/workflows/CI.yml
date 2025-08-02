@@ -81,6 +81,7 @@ jobs:
 
   test-base-branch:
     name: Base Branch Coverage
+    needs: test
     runs-on: ubuntu-latest
     # This 'if' condition ensures the job only runs on pull request events
     if: github.event_name == 'pull_request'
