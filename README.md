@@ -1,12 +1,13 @@
-# MapUnroll
+# MapUnroll.jl
 
 [![Build Status](https://github.com/alecloudenback/MapUnroll.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/alecloudenback/MapUnroll.jl/actions/workflows/CI.yml?query=branch%3Amain)
 [![Coverage](https://codecov.io/gh/alecloudenback/MapUnroll.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/alecloudenback/MapUnroll.jl)
 
+`MapUnroll.jl` provides the `@unroll` macro to help write performant, type-stable, and order-dependent loops without needing to manually define the output container.
 
-## Quickstart
+## The Problem: Stateful `map` Operations
 
-To avoid issues and ensure performance with `map`s that use intermediate variables. Users should turn this pattern:
+Consider a simulation where each step depends on the result of the previous one. A naive implementation using `map` might look like this:
 
 ```julia
 function simulate(n)
@@ -14,13 +15,21 @@ function simulate(n)
 
     map(1:n) do i
         x += exp(i)
-        (timestep=i,state=x)
+        (timestep=i, state=x)
     end
-
 end
 ```
 
-Into this:
+This pattern has two significant issues:
+
+1.  **Performance:** The variable `x` is closed over and "boxed" (wrapped in a mutable container) by the compiler, leading to type instability and poor performance.
+2.  **Correctness:** `map` does not guarantee sequential execution. For a stateful calculation like this, the order of operations is critical, meaning `map` could produce an incorrect result.
+
+## The Solution: `@unroll`
+
+`MapUnroll.jl` solves both problems by combining the guaranteed execution order of a `for` loop with automatic output type inference.
+
+To fix the `simulate` function, we use the `@unroll` macro and utilities re-exported for convenience from `BangBang.jl` and `MicroCollections.jl`.
 
 ```julia
 using MapUnroll
@@ -31,42 +40,27 @@ function simulate_unroll(n)
 
     @unroll 2 for i ∈ 1:n
         x += exp(i)
-        out = setindex!!(out, (timestep=i,state=x), i)
+        out = setindex!!(out, (timestep=i, state=x), i)
     end
     out
 end
 ```
 
-## Explanation
+### How it Works
 
-This package addresses situations where you would like to map over a collection and return a concretely typed array that depends on some intermediate variables. For example:
+The `@unroll` macro "unrolls" the first few iterations of the loop (default is 2). This allows the Julia compiler to observe the type of the object being created.
 
-```julia
-function simulate(n)
-    x = 0.
+1.  From the first iteration, the compiler infers the concrete `eltype` of the output.
+2.  `setindex!!` then creates a new output container (`Vector`) with that specific `eltype`.
+3.  The rest of the loop populates the new, type-stable vector.
 
-    map(1:n) do t
-        x += exp(i)
-        (timestep=t,state=x)
-    end
+This avoids the boxing and performance issues of the `map` approach, while the `for` loop ensures correctness by executing in sequence.
 
-end
-```
+### Performance Comparison
 
-In the above code, `x` is effectively a global variable with respect to the closure created to the inner `map`. This means that `x` get's "boxed" and is wrapped in a mutable container for use within the map's loop.
+The `@unroll` version avoids the `Core.Box` allocation and is significantly faster.
 
-Another potential problem is that `map` does not guarantee execution in sequential order, meaning that our simulation could end up being calculated out-of-order.
-
-An alternative is to write a `for` loop. However, the user then needs to take care to create the appropriate output container. For simple types this may work, but for complex types we would prefer that the compiler infer what the output `eltype` of our output vector should be.
-
-`@unroll` addresses this by 'unrolling' the loop, or making the first couple (default `N=2`) iterations occur before the `for` loop actually begins, thus letting the compiler calculate the type of the object that will be placed into the output vector.
-
-Then, from MicroCollections.jl (`UndefVector`) and BangBang.jl (`setindex!!`), the output container can be efficiently expanded by the compiler to return type stable and performant code. `UndefVector` and `setindex!!` are re-exported from MapUnroll.jl for convenience.
-
-Comparing the two versions of the simulation above:
-
-The original `simulate` does not avoid boxing the intermediate variable:
-
+**Original `simulate`:**
 ```julia-repl
 julia> @code_warntype simulate(100)
 ...
@@ -75,28 +69,32 @@ Locals
   x::Core.Box
 Body::Vector
 1 ─       (x = Core.Box())
-│   %2  = x::Core.Box
-│         Core.setfield!(%2, :contents, 0.0)
-│   %4  = Main.map::Core.Const(map)
-│   %5  = Main.:(var"#15#16")::Core.Const(var"#15#16")
-│   %6  = x::Core.Box
-│         (#15 = %new(%5, %6))
-│   %8  = #15::var"#15#16"
-│   %9  = (1:n)::Core.PartialStruct(UnitRange{Int64}, Any[Core.Const(1), Int64])
-│   %10 = (%4)(%8, %9)::Vector
-└──       return %10
+...
 ```
-
-However `simulate_unroll` avoids this and has faster performance as a result:
-
 ```julia-repl
 julia> using BenchmarkTools
 julia> @btime simulate(100)
   9.167 μs (407 allocations: 11.12 KiB)
+```
+
+**`simulate_unroll` with MapUnroll.jl:**
+```julia-repl
 julia> @btime simulate_unroll(100)
   233.583 ns (2 allocations: 1.62 KiB)
 ```
 
+## Comparison with Other Approaches
+
+| Method | Performance | Correctness (Order) | When to Use |
+| :--- | :--- | :--- | :--- |
+| **`map` with closure** | Poor (boxing) | No | Not recommended for stateful loops. |
+| **`map` with `Ref`** | Good | No | When order doesn't matter but you need to mutate a value. |
+| **`accumulate`** | Good | Yes | An excellent, idiomatic choice for this specific simulation pattern, but can get verbose and unweildy when the current state gets complex. |
+| **`@unroll` (this package)** | Good | Yes | For developers who prefer an explicit `for` loop, or for complex loop bodies where `accumulate` is less natural. |
+
+While using a `Ref(x)` can solve the boxing problem, it does not solve the execution order problem with `map`. For stateful patterns, idiomatic functional approaches like `accumulate` are also a great option. `@unroll` provides a general-purpose tool that gives the developer control over the loop structure while delegating the tedious parts of output container creation to the compiler.
+
 ## Credit
 
-The original `@unroll` macro was developed by [Mason Protter](https://github.com/MasonProtter)
+The original `@unroll` macro was developed by [Mason Protter](https://github.com/MasonProtter).
+
