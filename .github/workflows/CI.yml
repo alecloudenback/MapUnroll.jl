@@ -141,9 +141,7 @@ jobs:
           comparison_df.base_coverage = coalesce.(comparison_df.base_coverage, 0.0)
           comparison_df.pr_coverage = coalesce.(comparison_df.pr_coverage, 0.0)
           comparison_df.change = comparison_df.pr_coverage .- comparison_df.base_coverage
-
-          # Format change to be a signed string
-          comparison_df.change_str = [chg == 0.0 ? "±0.0" : @sprintf("%+.2f", chg) for chg in comparison_df.change]
+          @show comparison_df
 
           # --- 3. Create Markdown Table ---
           # Define Highlighters for the table
@@ -153,13 +151,14 @@ jobs:
            )
 
           # Select and rename columns for the final table
-          final_table_df = select(comparison_df, :file, :base_coverage, :pr_coverage, :change, :change_str)
-          rename!(final_table_df, :file => "File", :base_coverage => "Base (%)", :pr_coverage => "PR (%)", :change_str => "Change (%)")
+          final_table_df = select(comparison_df, :file, :base_coverage, :pr_coverage, :change)
 
           # Write the markdown table to a file
           open("cov_table.md", "w") do io
               pretty_table(io,
-                  final_table_df[!, ["File", "Base (%)", "PR (%)", "Change (%)"]]; # Use the string version of change
+                  final_table_df[!, 
+                  header = ["File", "Base (%)", "PR (%)", "Change (%)"]; # Use the string version of change
+                  formatters=ft_printf("%5.2f", 2:4),
                   backend = Val(:markdown),
                   highlighters = (mh_1, mh_1)
               )
