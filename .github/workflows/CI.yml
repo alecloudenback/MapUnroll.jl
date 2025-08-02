@@ -180,7 +180,7 @@ jobs:
           
           # Find the first CSV file in the downloaded PR artifacts directory
           pr_artifact_dir = "coverage-summary-pr"
-          pr_file = oinpath("coverage-summary-pr", "coverage-summary-pr.csv")
+          pr_file = joinpath("coverage-summary-pr", "coverage-summary-pr.csv")
 
           println("Comparing base file: $(base_file)")
           println("Comparing PR file: $(pr_file_path)")
