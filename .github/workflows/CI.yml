@@ -23,9 +23,8 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - '1.10'
-          - '1.11'
-          - 'pre'
+          - 'lts'
+          - '1'
         os:
           - ubuntu-latest
         arch:
@@ -42,6 +41,7 @@ jobs:
 
       # New step to generate the CSV
       - name: Generate coverage summary for this PR
+        if: matrix.version == '1' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'
         shell: julia --project --color=yes {0}
         run: |
           using Pkg
@@ -76,7 +76,7 @@ jobs:
       # New step to upload the CSV as an artifact
       - uses: actions/upload-artifact@v4
         with:
-          name: coverage-summary-${{ matrix.version }}-${{ matrix.os }}-${{ matrix.arch }}
+          name: coverage-summary-pr
           path: coverage_summary_pr.csv
 
   test-base-branch:
@@ -138,6 +138,73 @@ jobs:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+            compare-coverage:
+  name: Compare Coverage
+  runs-on: ubuntu-latest
+  # This job must run after the test jobs are complete
+  needs: [test, test-base-branch]
+  # Only run on pull requests, and only if the upstream jobs succeeded
+  if: github.event_name == 'pull_request' && success()
+
+  steps:
+    - name: Setup Julia
+      uses: julia-actions/setup-julia@v2
+      with:
+        version: '1'
+
+    - name: Download Base Branch Coverage Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: base-coverage-summary
+        path: coverage_summary_base.csv
+
+    - name: Download PR Branch Coverage Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        # Use a pattern to grab the PR artifact, regardless of the matrix build
+        name: coverage-summary-pr
+        path: coverage_summary_pr.csv
+
+    - name: Compare Coverage Summaries
+      id: compare_step
+      shell: julia --project --color=yes {0}
+      run: |
+        using Pkg
+        Pkg.add(["CSV", "DataFrames","PrettyTables"])
+        using CSV, DataFrames
+
+        # --- 1. Load Data ---
+        # The artifact is downloaded into a directory with the same name
+        base_file = joinpath("base-coverage-summary", "coverage_summary_base.csv")
+        
+        # Find the first CSV file in the downloaded PR artifacts directory
+        pr_artifact_dir = "coverage-summary-pr"
+        pr_file = oinpath("coverage-summary-pr", "coverage-summary-pr.csv")
+
+        println("Comparing base file: $(base_file)")
+        println("Comparing PR file: $(pr_file_path)")
+
+        base_df = CSV.read(base_file, DataFrame)
+        pr_df = CSV.read(pr_file_path, DataFrame)
+
+        # --- 2. Join DataFrames ---
+        # Rename columns to avoid clashes after joining
+        rename!(base_df, :coverage_percentage => :base_coverage)
+        rename!(pr_df, :coverage_percentage => :pr_coverage)
+        
+        # An outer join correctly handles new files (missing in base) and deleted files (missing in pr)
+        comparison_df = outerjoin(base_df[!, [:file, :base_coverage]], pr_df[!, [:file, :pr_coverage]], on = :file)
+
+        # --- 3. Calculate Deltas ---
+        # Replace missing values with 0. A new file has 0 base coverage; a deleted file has 0 pr coverage.
+        comparison_df.base_coverage = coalesce.(comparison_df.base_coverage, 0.0)
+        comparison_df.pr_coverage = coalesce.(comparison_df.pr_coverage, 0.0)
+        
+        # Calculate the change
+        comparison_df.change = comparison_df.pr_coverage - comparison_df.base_coverage
+
+        comparison_df
 
   docs:
     name: Documentation
