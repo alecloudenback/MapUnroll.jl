@@ -105,7 +105,7 @@ jobs:
         with:
           # Use a pattern to grab the PR artifact, regardless of the matrix build
           name: coverage-summary-pr
-          path: coverage_summary_pr.csv
+          path: . # <-- Downloads file(s) into the current directory
 
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-buildpkg@v1
@@ -141,8 +141,7 @@ jobs:
           base_file = "coverage_summary_base.csv"
           
           # Find the first CSV file in the downloaded PR artifacts directory
-          pr_artifact_dir = "coverage-summary-pr"
-          pr_file = joinpath("coverage-summary-pr", "coverage-summary-pr.csv")
+          pr_file = "coverage_summary_pr.csv"
 
           println("Comparing base file: $(base_file)")
           println("Comparing PR file: $(pr_file)")
@@ -171,6 +170,14 @@ jobs:
           mh_1 = MarkdownHighlighter(
            (data, i, j) -> data < 0,
            MarkdownDecoration(bold = true)
+          )
+
+          pretty_table(
+           data;
+           alignment = [:c, :r, :c, :l],
+           backend = Val(:markdown),
+           header = header,
+           highlighters = (hl_p, hl_v)
           )
 
       - name: Upload base coverage artifact
