@@ -138,7 +138,7 @@ jobs:
 
           # --- 1. Load Data ---
           # The artifact is downloaded into a directory with the same name
-          base_file = joinpath("base-coverage-summary", "coverage_summary_base.csv")
+          base_file = "coverage_summary_base.csv"
           
           # Find the first CSV file in the downloaded PR artifacts directory
           pr_artifact_dir = "coverage-summary-pr"
@@ -167,6 +167,11 @@ jobs:
           comparison_df.change = comparison_df.pr_coverage - comparison_df.base_coverage
 
           comparison_df
+
+          mh_1 = MarkdownHighlighter(
+           (data, i, j) -> data < 0,
+           MarkdownDecoration(bold = true)
+          )
 
       - name: Upload base coverage artifact
         uses: actions/upload-artifact@v4
