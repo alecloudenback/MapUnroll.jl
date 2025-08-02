@@ -48,7 +48,7 @@ jobs:
           Pkg.add(["Coverage","CSV"])
           using Coverage
 
-          # Collect coverage from .cov files in the src folder
+          # Collect coverage from .cov files
           coverage = process_folder("src")
 
           # Open a file to write the summary
@@ -58,17 +58,17 @@ jobs:
 
               # Write data for each file
               for file in coverage
-                  summary = get_summary(file)
-                  # Skip files with no lines to cover
-                  if summary.total_lines > 0
+                  # get_summary returns a tuple: (covered_lines, total_lines)
+                  covered_lines, total_lines = get_summary(file)
+                  
+                  if total_lines > 0
                       filename = file.filename
-                      covered = summary.covered_lines
-                      total = summary.total_lines
-                      percentage = round(100 * covered / total, digits=2)
-                      println(io, "$filename,$covered,$total,$percentage")
+                      percentage = round(100 * covered_lines / total_lines, digits=2)
+                      println(io, "$filename,$covered_lines,$total_lines,$percentage")
                   end
               end
           end
+
 
           println("Coverage summary saved to coverage_summary.csv")
           cat coverage_summary.csv
