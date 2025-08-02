@@ -165,20 +165,14 @@ jobs:
           # Calculate the change
           comparison_df.change = comparison_df.pr_coverage - comparison_df.base_coverage
 
-          comparison_df
+          @show comparison_df
 
+          using PrettyTables
           mh_1 = MarkdownHighlighter(
            (data, i, j) -> data < 0,
            MarkdownDecoration(bold = true)
           )
 
-          pretty_table(
-           data;
-           alignment = [:c, :r, :c, :l],
-           backend = Val(:markdown),
-           header = header,
-           highlighters = (hl_p, hl_v)
-          )
 
       - name: Upload base coverage artifact
         uses: actions/upload-artifact@v4
